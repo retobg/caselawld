@@ -35,6 +35,12 @@
       <artifactId>rdf.ontologies</artifactId>
       <version>0.11-incubating</version>
     </dependency>
+    <dependency>
+      <groupId>org.apache.clerezza</groupId>
+      <artifactId>rdf.utils</artifactId>
+      <version>0.14-SNAPSHOT</version>
+      <type>jar</type>
+    </dependency>
   </dependencies>
 
   <build>

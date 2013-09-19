@@ -1,10 +1,9 @@
 package ch.opendata.law.fccextractor;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
 import java.nio.charset.Charset;
 import java.util.Collections;
 import java.util.Map;
@@ -12,7 +11,6 @@ import java.util.logging.Level;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.Result;
 import javax.xml.transform.Source;
 import javax.xml.transform.Transformer;
 import javax.xml.transform.TransformerConfigurationException;
@@ -23,11 +21,10 @@ import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 import org.apache.clerezza.rdf.core.MGraph;
 import org.apache.clerezza.rdf.core.UriRef;
-import org.apache.clerezza.rdf.core.impl.PlainLiteralImpl;
-import org.apache.clerezza.rdf.core.impl.TripleImpl;
-import org.apache.clerezza.rdf.ontologies.DCTERMS;
-import org.apache.clerezza.rdf.ontologies.RDFS;
-import org.apache.commons.io.IOUtils;
+import org.apache.clerezza.rdf.core.impl.SimpleMGraph;
+import org.apache.clerezza.rdf.core.serializedform.Parser;
+import org.apache.clerezza.rdf.core.serializedform.SupportedFormat;
+import org.apache.clerezza.rdf.utils.GraphNode;
 import org.apache.felix.scr.annotations.Component;
 import org.apache.felix.scr.annotations.Properties;
 import org.apache.felix.scr.annotations.Property;
@@ -42,7 +39,6 @@ import org.apache.stanbol.enhancer.servicesapi.EnhancementEngine;
 import org.apache.stanbol.enhancer.servicesapi.InvalidContentException;
 import org.apache.stanbol.enhancer.servicesapi.ServiceProperties;
 import org.apache.stanbol.enhancer.servicesapi.helper.ContentItemHelper;
-import org.apache.stanbol.enhancer.servicesapi.helper.EnhancementEngineHelper;
 import static org.apache.stanbol.enhancer.servicesapi.helper.EnhancementEngineHelper.randomUUID;
 import org.apache.stanbol.enhancer.servicesapi.impl.AbstractEnhancementEngine;
 import org.slf4j.Logger;
@@ -64,9 +60,11 @@ public class FccEnhancer extends AbstractEnhancementEngine
      */
     private static final Logger log = LoggerFactory.getLogger(FccEnhancer.class);
     private static final Charset UTF8 = Charset.forName("UTF-8");
-    
     @Reference
     private ContentItemFactory ciFactory;
+    
+    @Reference
+    private Parser parser;
 
     /**
      * ServiceProperties are currently only used for automatic ordering of the
@@ -123,17 +121,8 @@ public class FccEnhancer extends AbstractEnhancementEngine
             Document doc = db.parse(new InputSource(in));
             //db.setEntityResolver(new NullResolver());
             System.out.println("xml: " + doc);
-            TransformerFactory tf = TransformerFactory.newInstance();
-            Source xsltSource = new StreamSource(getClass().getResourceAsStream("caselaw.xsl"));
-            
-            ContentSink plainTextSink = ciFactory.createContentSink("text/plain" +"; charset="+UTF8.name());
-            StreamResult result = new StreamResult(plainTextSink.getOutputStream());
-            Transformer t = tf.newTransformer(xsltSource);
-            t.transform(new DOMSource(doc), result);      
-            String random = randomUUID().toString();
-            UriRef textBlobUri = new UriRef("urn:fcc:text:"+random);
-            ci.addPart(textBlobUri, plainTextSink.getBlob());
-            
+            extractPlainText(doc, ci);
+            extractMetadata(doc, ci);
         } catch (ParserConfigurationException ex) {
             java.util.logging.Logger.getLogger(FccEnhancer.class.getName()).log(Level.SEVERE, null, ex);
         } catch (SAXException ex) {
@@ -145,5 +134,32 @@ public class FccEnhancer extends AbstractEnhancementEngine
         } catch (TransformerException ex) {
             java.util.logging.Logger.getLogger(FccEnhancer.class.getName()).log(Level.SEVERE, null, ex);
         }
+    }
+
+    private void extractPlainText(Document doc, ContentItem ci) throws TransformerException, IOException {
+        TransformerFactory tf = TransformerFactory.newInstance();
+        Source xsltSource = new StreamSource(getClass().getResourceAsStream("caselaw.xsl"));
+        ContentSink plainTextSink = ciFactory.createContentSink("text/plain" + "; charset=" + UTF8.name());
+        StreamResult result = new StreamResult(plainTextSink.getOutputStream());
+        Transformer t = tf.newTransformer(xsltSource);
+        t.transform(new DOMSource(doc), result);
+        String random = randomUUID().toString();
+        UriRef textBlobUri = new UriRef("urn:fcc:text:" + random);
+        ci.addPart(textBlobUri, plainTextSink.getBlob());
+    }
+    
+    
+    private void extractMetadata(Document doc, ContentItem ci) throws TransformerException, IOException {
+        TransformerFactory tf = TransformerFactory.newInstance();
+        Source xsltSource = new StreamSource(getClass().getResourceAsStream("caselaw-rdf.xsl"));
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        StreamResult result = new StreamResult(baos);
+        Transformer t = tf.newTransformer(xsltSource);
+        t.transform(new DOMSource(doc), result);
+        MGraph parsedData = new SimpleMGraph();
+        parser.parse(parsedData, new ByteArrayInputStream(baos.toByteArray()), SupportedFormat.RDF_XML);
+        GraphNode docNode = new GraphNode(new UriRef("urn:x-current-document:/"), parsedData);
+        docNode.replaceWith(ci.getUri());
+        ci.getMetadata().addAll(parsedData);
     }
 }
